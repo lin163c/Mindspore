@@ -5,13 +5,13 @@ conda create -n mindspore python=3.9
 conda activate mindspore
 
 2. 安装华为开源自研AI框架MindSpore
-pip install mindspore-gpu
+pip install mindspore
 
-3. Paillier同态加密库
+1. Paillier同态加密库
 pip install phe
 
-4. 运行
-CUDA_VISIBLE_DEVICES=0 python MindSpore.py
+1. 运行
+python MindSpore.py
 
 # 输出示例说明
 """

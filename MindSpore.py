@@ -4,12 +4,9 @@ from mindspore import Tensor
 import numpy as np
 import hashlib
 import random
+import re  # 添加re模块用于正则表达式脱敏
 from phe import paillier  # 同态加密库
 from typing import List, Dict, Any, Tuple
-import re  # 添加正则表达式支持
-
-# 设置GPU上下文
-ms.context.set_context(mode=ms.context.PYNATIVE_MODE, device_target="GPU")
 
 class AdvancedPrivacyPreserver:
     def __init__(self, num_parties: int, field_specs: List[Dict[str, Any]]):
@@ -33,11 +30,6 @@ class AdvancedPrivacyPreserver:
         
         # 生成共享密钥(简化版)
         self.shared_keys = self._generate_shared_keys()
-        
-        # 创建GPU加速的随机数生成器
-        self.rand = ops.UniformReal()
-        self.laplace = ops.Laplace(seed=42)
-        self.normal = ops.StandardNormal(seed=42)
     
     def _generate_shared_keys(self) -> Dict[Tuple[int, int], Any]:
         """生成参与方之间的共享密钥"""
@@ -52,20 +44,16 @@ class AdvancedPrivacyPreserver:
                 keys[(i, j)] = key
         return keys
     
-    # ================== GPU加速的差分隐私方法 ==================
+    # ================== 差分隐私方法 ==================
     def _laplace_mechanism(self, value: float, sensitivity: float, epsilon: float) -> float:
-        """GPU加速的拉普拉斯机制实现"""
+        """拉普拉斯机制实现"""
         scale = sensitivity / epsilon
-        # 使用MindSpore算子生成拉普拉斯噪声
-        noise = self.laplace((1,)) * scale
-        return float(value) + float(noise.asnumpy()[0])
+        return value + np.random.laplace(0, scale)
     
     def _gaussian_mechanism(self, value: float, sensitivity: float, epsilon: float, delta: float) -> float:
-        """GPU加速的高斯机制实现"""
+        """高斯机制实现"""
         sigma = np.sqrt(2 * np.log(1.25 / delta)) * sensitivity / epsilon
-        # 使用MindSpore算子生成高斯噪声
-        noise = self.normal((1,)) * sigma
-        return float(value) + float(noise.asnumpy()[0])
+        return value + np.random.normal(0, sigma)
     
     def apply_dp(self, value: Any, field_idx: int) -> Any:
         """应用差分隐私保护"""
@@ -73,8 +61,11 @@ class AdvancedPrivacyPreserver:
         if not spec.get('dp_params') or spec['dtype'] not in ['int', 'float']:
             return value
         
-        epsilon, delta = spec['dp_params']['epsilon'], spec['dp_params'].get('delta', 1e-5)
-        sensitivity = spec['dp_params'].get('sensitivity', 1.0)
+        # 获取参数并提供默认值
+        dp_params = spec['dp_params']
+        epsilon = dp_params.get('epsilon', 1.0)
+        delta = dp_params.get('delta', 1e-5)
+        sensitivity = dp_params.get('sensitivity', 1.0)
         
         if delta > 0:
             return self._gaussian_mechanism(float(value), sensitivity, epsilon, delta)
@@ -85,6 +76,7 @@ class AdvancedPrivacyPreserver:
     def homomorphic_encrypt(self, value: Any, field_idx: int) -> Any:
         """同态加密数据"""
         spec = self.field_specs[field_idx]
+        # 只加密数值类型且需要聚合的字段
         if spec['dtype'] not in ['int', 'float'] or not spec.get('needs_aggregation'):
             return value
         
@@ -166,7 +158,7 @@ class AdvancedPrivacyPreserver:
         """安全聚合加密数据"""
         aggregated = {}
         field_indices = [i for i, spec in enumerate(self.field_specs) 
-                        if spec.get('needs_aggregation')]
+                        if spec.get('needs_aggregation') and spec['dtype'] in ['int', 'float']]  # 只聚合数值字段
         
         for idx in field_indices:
             key = f'field_{idx}'
@@ -176,11 +168,9 @@ class AdvancedPrivacyPreserver:
             # 同态求和
             sum_encrypted = self.homomorphic_sum(values)
             
-            # 解密并应用差分隐私(如果需要)
+            # 解密
             sum_decrypted = self.homomorphic_decrypt(sum_encrypted)
             spec = self.field_specs[idx]
-            if spec.get('dp_params'):
-                sum_decrypted = self.apply_dp(sum_decrypted, idx)
             
             aggregated[key] = {
                 'sum': sum_decrypted,
@@ -192,14 +182,10 @@ class AdvancedPrivacyPreserver:
 
 
 if __name__ == "__main__":
-    # 设置GPU上下文
-    ms.context.set_context(mode=ms.context.PYNATIVE_MODE, device_target="GPU")
-    
-    # 定义数据规范
     field_specs = [
         {'name': 'id', 'dtype': 'int', 'is_sensitive': False, 'needs_aggregation': False},
         {'name': 'name', 'dtype': 'str', 'is_sensitive': True, 'needs_aggregation': False},
-        {'name': 'gender', 'dtype': 'str', 'is_sensitive': False, 'needs_aggregation': True},
+        {'name': 'gender', 'dtype': 'str', 'is_sensitive': False, 'needs_aggregation': False}, 
         {'name': 'age', 'dtype': 'int', 'is_sensitive': True, 
          'needs_aggregation': True, 'dp_params': {'epsilon': 0.5, 'sensitivity': 1}},
         {'name': 'salary', 'dtype': 'float', 'is_sensitive': True,
